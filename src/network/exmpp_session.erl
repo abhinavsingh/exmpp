@@ -66,7 +66,7 @@
 	 connect_BOSH/4,
 	 register_account/2, register_account/3,
 	 login/1, login/2, login/3,
-	 send_packet/2,
+	 send_packet/2, reset_parser/1,
 	 set_controlling_process/2,
      get_connection_property/2]).
 
@@ -384,6 +384,9 @@ send_packet(Session, Packet) when is_pid(Session) ->
         Id -> Id
     end.
 
+reset_parser(Session) when is_pid(Session) ->
+    Session ! reset_parser.
+
 %% @doc Get a property of the underling connection (socket or bosh connection)
 %%
 %%      See documentation on exmpp_socket and exmpp_bosh to see the supported properties.
@@ -441,6 +444,9 @@ handle_sync_event(_Event, _From, StateName, State) ->
     Reply = ok,
     {reply, Reply, StateName, State}.
 
+handle_info(reset_parser, StateName, State=#state{connection = Module, receiver_ref = ReceiverRef}) ->
+	Module:reset_parser(ReceiverRef),
+	{next_state, StateName, State};
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
 
@@ -660,7 +666,7 @@ wait_for_stream_features(X, State) ->
 
 wait_for_compression_result(#xmlstreamelement{element=#xmlel{name='compressed'}}, State=#state{domain=Domain}) ->
     #state{connection = Module,
-           receiver_ref = ReceiverRef,
+           receiver_ref = ReceiverRef
            %%auth_info = Auth
            } = State,
     case Module:compress(ReceiverRef) of
@@ -675,7 +681,7 @@ wait_for_compression_result(#xmlstreamelement{element=#xmlel{name='compressed'}}
 
 wait_for_starttls_result(#xmlstreamelement{element=#xmlel{name='proceed'}}, State=#state{domain=Domain}) ->
     #state{connection = Module,
-           receiver_ref = ReceiverRef,
+           receiver_ref = ReceiverRef
            %%auth_info = Auth
            } = State,
     case Module:starttls(ReceiverRef, client) of
@@ -805,8 +811,6 @@ stream_opened({set_auth_method, Method}, _From, State) ->
 stream_opened({presence, _Status, _Show}, _From, State) ->
     {reply, {error, not_logged_in}, setup, State};
 
-
-
 %% We allow to send packet here to give control to the developer on all packet
 %% send to the server. The developer can implements his own login management
 %% code.
@@ -833,6 +837,11 @@ stream_opened(?streamerror, State) ->
 %% Handle end of stream
 stream_opened(?streamend, State) ->
     {next_state, stream_closed, State};
+
+%% Process start stream
+stream_opened(#xmlstreamstart{element=Packet}, State = #state{client_pid = From}) ->
+	From ! #received_packet{packet_type=stream, raw_packet = Packet},
+	{next_state, stream_opened, State};
 
 %% any other element (features and starttls for 1.0 streams)
 stream_opened(#xmlstreamelement{element=Packet}, State) ->
@@ -1160,7 +1169,7 @@ check_id(Attrs) ->
 	<<>> ->
 	    Id = exmpp_utils:random_id("session"),
 	    {exmpp_xml:set_attribute_in_list(Attrs, <<"id">>, Id), Id};
-        Id -> {Attrs, Id}
+    Id -> {Attrs, Id}
     end.
 
 %% Try getting a given atribute from a list of xmlattr records
