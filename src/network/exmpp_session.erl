@@ -68,7 +68,8 @@
 	 login/1, login/2, login/3,
 	 send_packet/2, reset_parser/1,
 	 set_controlling_process/2,
-     get_connection_property/2]).
+     get_connection_property/2,
+		 get_property/2]).
 
 %% gen_fsm callbacks
 -export([init/1,
@@ -387,6 +388,10 @@ send_packet(Session, Packet) when is_pid(Session) ->
 reset_parser(Session) when is_pid(Session) ->
     Session ! reset_parser.
 
+%% majorly to retrieve underlying connection reference
+get_property(Session, Prop) -> 
+	gen_fsm:sync_send_all_state_event(Session, {get_property, Prop}).
+
 %% @doc Get a property of the underling connection (socket or bosh connection)
 %%
 %%      See documentation on exmpp_socket and exmpp_bosh to see the supported properties.
@@ -433,6 +438,10 @@ handle_event(_Event, StateName, State) ->
 handle_sync_event(stop, _From, _StateName, State) ->
     Reply = ok,
     {stop, normal, Reply, State};
+
+handle_sync_event({get_property, connection_ref}, _From, StateName, State) ->
+    {reply,State#state.connection_ref,StateName,State};
+
 handle_sync_event({set_controlling_process,Client}, _From, StateName, State) ->
     Reply = ok,
     {reply,Reply,StateName,State#state{client_pid=Client}};
@@ -837,6 +846,12 @@ stream_opened(?streamerror, State) ->
 %% Handle end of stream
 stream_opened(?streamend, State) ->
     {next_state, stream_closed, State};
+
+%% handle start of stream rcvd due to stream restart
+stream_opened(Start = ?stream, State) ->
+	State#state.client_pid ! #received_packet{packet_type = stream,
+                                 raw_packet = Start},
+    {next_state, stream_opened, State};
 
 %% Process start stream
 stream_opened(#xmlstreamstart{element=Packet}, State = #state{client_pid = From}) ->
